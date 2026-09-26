@@ -1,0 +1,14 @@
+{
+  "name": "Vibration Meter",
+  "short_name": "VibMeter",
+  "description": "Record steering-wheel vibrations with GPS speed and attribute them to a probable cause.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0d0d0d",
+  "theme_color": "#0d0d0d",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

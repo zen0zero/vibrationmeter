@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d0d0d">
+  <meta name="description" content="Record steering-wheel vibrations with GPS speed and attribute them to a probable cause.">
+  <title>Vibration Meter</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Vibration Meter</h1>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-view="record" aria-selected="true">Record</button>
+      <button role="tab" data-view="recordings">Recordings</button>
+      <button role="tab" data-view="analysis">Analysis</button>
+      <button role="tab" data-view="vehicle">Vehicle</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- RECORD -->
+    <section id="view-record" class="view active">
+      <div id="rec-alerts"></div>
+      <div class="tiles">
+        <div class="tile hero"><span class="label">Speed</span><span class="value" id="live-speed">–</span><span class="unit">km/h</span></div>
+        <div class="tile hero"><span class="label">Vibration</span><span class="value" id="live-rms">–</span><span class="unit">m/s² RMS</span></div>
+        <div class="tile"><span class="label">Dominant</span><span class="value" id="live-peak">–</span><span class="unit" id="live-order">Hz</span></div>
+        <div class="tile"><span class="label">Sample rate</span><span class="value" id="live-rate">–</span><span class="unit">Hz</span></div>
+        <div class="tile"><span class="label">GPS</span><span class="value" id="live-gps">–</span><span class="unit" id="live-gps-unit">accuracy m</span></div>
+        <div class="tile"><span class="label">Elapsed</span><span class="value" id="live-time">0:00</span><span class="unit" id="live-samples">0 samples</span></div>
+      </div>
+      <div class="card">
+        <div class="card-h">Live signal <span class="legend"><i class="sw s1"></i>X <i class="sw s2"></i>Y <i class="sw s3"></i>Z <small>(gravity removed)</small></span></div>
+        <div class="chart short" id="live-chart"></div>
+      </div>
+      <div class="rec-controls">
+        <input id="rec-name" type="text" placeholder="Recording name (optional)" autocomplete="off">
+        <button id="btn-start" class="big primary">Start recording</button>
+        <button id="btn-mark" class="big mark" disabled>Mark “I feel it now”</button>
+      </div>
+      <details class="help">
+        <summary>How to record a useful drive</summary>
+        <ol>
+          <li>Mount the phone <b>rigidly</b> to the steering wheel (a clamp or strap, screen facing you). A loose mount adds its own rattle.</li>
+          <li>Set tire size in <b>Vehicle</b> so vibrations can be matched to wheel rotation.</li>
+          <li>Press <b>Start</b> before you drive. Keep the screen on and the app in front – Android pauses sensors in the background.</li>
+          <li>Include: 30 s at standstill with the engine running, steady speed through the range where you feel it (hold each speed ≥ 20 s), a few firm stops, and a couple of strong accelerations.</li>
+          <li>A passenger can press <b>Mark</b> when the vibration is felt. Don't touch the phone while driving.</li>
+        </ol>
+      </details>
+    </section>
+
+    <!-- RECORDINGS -->
+    <section id="view-recordings" class="view">
+      <div class="row-actions">
+        <label class="btn">Import CSV / JSON<input id="file-import" type="file" accept=".csv,.json,text/csv,application/json" hidden></label>
+        <button id="btn-demo" class="btn">Load demo drive</button>
+      </div>
+      <p class="muted small" id="storage-info"></p>
+      <ul id="rec-list" class="rec-list"></ul>
+    </section>
+
+    <!-- ANALYSIS -->
+    <section id="view-analysis" class="view">
+      <div id="an-empty" class="empty">Pick a recording in <b>Recordings</b> and press <b>Analyze</b>.</div>
+      <div id="an-body" hidden>
+        <div class="card">
+          <div class="card-h" id="an-title"></div>
+          <div class="muted small" id="an-summary"></div>
+        </div>
+        <h2>Probable causes</h2>
+        <div id="an-findings"></div>
+        <p class="muted small">Heuristic assessment from phone sensors – use it to guide inspection, not as a verdict. Confidence reflects how clearly the pattern stands out in this recording.</p>
+
+        <h2>Speed</h2>
+        <div class="card"><div class="chart" id="ch-speed"></div></div>
+        <h2>Vibration over time</h2>
+        <div class="card">
+          <div class="legend"><i class="sw s1"></i>X <i class="sw s2"></i>Y <i class="sw s3"></i>Z <span class="band-key brake"></span>braking <span class="band-key accel"></span>accelerating</div>
+          <div class="chart" id="ch-rms"></div>
+        </div>
+        <h2>Spectrogram</h2>
+        <div class="card">
+          <p class="muted small">Frequency content over time. Dashed lines show where 1× and 2× wheel-rotation vibrations would be at the GPS speed – bright energy following a line is locked to the wheels.</p>
+          <div class="chart tall" id="ch-spectro"></div>
+        </div>
+        <h2>Frequency vs speed</h2>
+        <div class="card">
+          <p class="muted small">Average spectrum at each road speed. Wheel-related vibrations follow the diagonal order lines; horizontal bands are fixed-frequency (resonance, engine at idle).</p>
+          <div class="chart tall" id="ch-campbell"></div>
+        </div>
+        <h2>Wheel-order spectrum</h2>
+        <div class="card">
+          <div class="legend"><i class="sw s1"></i>Vibration (acceleration) <i class="sw s2" id="gyro-key"></i><span id="gyro-key-label">Steering-wheel rotation</span></div>
+          <p class="muted small">Energy re-plotted against multiples of wheel speed, relative to the median. A spike at 1 = once per wheel turn.</p>
+          <div class="chart" id="ch-orders"></div>
+        </div>
+        <h2>Vibration by speed band</h2>
+        <div class="card"><div class="chart" id="ch-bands"></div></div>
+        <div class="row-actions">
+          <button id="an-csv" class="btn">Export CSV</button>
+          <button id="an-json" class="btn">Export JSON</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- VEHICLE -->
+    <section id="view-vehicle" class="view">
+      <form id="vehicle-form" class="card form">
+        <label>Tire size <input name="tire" placeholder="205/55R16" autocomplete="off"></label>
+        <div class="muted small" id="tire-info"></div>
+        <label>Rolling circumference override (m) <input name="circumference" type="number" step="0.001" min="0.5" max="5" placeholder="auto from tire size"></label>
+        <label>Final drive ratio (optional) <input name="finalDrive" type="number" step="0.01" min="1" max="8" placeholder="e.g. 3.91"></label>
+        <label>Engine cylinders <input name="cylinders" type="number" step="1" min="1" max="16" placeholder="4"></label>
+        <label>Drive
+          <select name="drive"><option value="FWD">Front-wheel drive</option><option value="RWD">Rear-wheel drive</option><option value="AWD">All-wheel drive</option></select>
+        </label>
+        <label>Notes <textarea name="notes" rows="2" placeholder="Car, tires, symptoms…"></textarea></label>
+        <p class="muted small">Saved on this phone and copied into every new recording.</p>
+      </form>
+      <div class="card small muted">
+        <b>About the measurement.</b> Android browsers deliver motion data at about 60 Hz, so vibrations up to ~30 Hz are measurable.
+        That covers wheel/tire orders (≈ 5–20 Hz at road speed) and brake judder. Engine firing frequency while driving is usually higher and is not reliably captured.
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
