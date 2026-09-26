@@ -1,8 +1,8 @@
 // Offline cache for the app shell (network-first, so updates arrive when online).
-const CACHE = 'vibrationmeter-v1';
+const CACHE = 'vibrationmeter-v2';
 const ASSETS = [
   './', 'index.html', 'css/style.css', 'manifest.webmanifest', 'icon.svg',
-  'js/app.js', 'js/recorder.js', 'js/storage.js', 'js/format.js', 'js/analysis.js', 'js/charts.js', 'js/sim.js',
+  'js/app.js', 'js/recorder.js', 'js/storage.js', 'js/format.js', 'js/analysis.js', 'js/charts.js', 'js/sim.js', 'js/steering.js',
 ];
 
 self.addEventListener('install', e => {

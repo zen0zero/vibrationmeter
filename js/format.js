@@ -1,3 +1,5 @@
+import { attachSteering } from './steering.js';
+
 // Data layout, import/export, and conversion of a raw recording into a
 // per-sample "track" (every accelerometer sample paired with GPS speed).
 
@@ -12,7 +14,11 @@ const CSV_COLUMNS = [
   'acc_x', 'acc_y', 'acc_z',            // accelerationIncludingGravity, m/s²
   'lin_x', 'lin_y', 'lin_z',            // acceleration without gravity (if the phone provides it), m/s²
   'rot_alpha', 'rot_beta', 'rot_gamma', // rotation rate, deg/s
-  'speed_kmh', 'lat', 'lon', 'gps_accuracy_m', 'gps_age_ms', 'marker',
+  'speed_kmh', 'lat', 'lon', 'gps_accuracy_m', 'gps_age_ms',
+  'steering_deg',                       // estimated steering-wheel angle, + = left
+  'lateral_acc',                        // cornering acceleration, m/s², + = left
+  'longitudinal_acc',                   // acceleration (+) / braking (−), m/s²
+  'marker',                             // 1 = "I feel it" mark, C = steering centre set
 ];
 
 const MAX_GPS_GAP_MS = 6000;
@@ -96,14 +102,18 @@ function num(x, digits) {
 }
 
 // Merged CSV: one row per accelerometer sample with the GPS data at that instant.
+function nearestIndex(track, t) {
+  let lo = 0, hi = track.n - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (track.t[m] < t) lo = m; else hi = m; }
+  return Math.abs(track.t[lo] - t) <= Math.abs(track.t[hi] - t) ? lo : hi;
+}
+
 export function toCsv(track) {
   const lines = [CSV_COLUMNS.join(',')];
-  const markerIdx = new Set();
-  for (const mt of track.markers) {
-    let best = 0;
-    for (let i = 1; i < track.n; i++) if (Math.abs(track.t[i] - mt) < Math.abs(track.t[best] - mt)) best = i;
-    markerIdx.add(best);
-  }
+  const markerIdx = new Map();
+  for (const mt of track.markers) markerIdx.set(nearestIndex(track, mt), '1');
+  for (const ts of track.meta?.steerCal || []) markerIdx.set(nearestIndex(track, (ts - track.t0) / 1000), 'C');
+  const st = attachSteering(track);
   for (let i = 0; i < track.n; i++) {
     lines.push([
       track.ts[i].toFixed(3), track.t[i].toFixed(4),
@@ -111,7 +121,8 @@ export function toCsv(track) {
       num(track.lx[i], 4), num(track.ly[i], 4), num(track.lz[i], 4),
       num(track.ra[i], 3), num(track.rb[i], 3), num(track.rg[i], 3),
       num(track.speed[i] * 3.6, 2), num(track.lat[i], 7), num(track.lon[i], 7),
-      num(track.gpsAcc[i], 1), num(track.gpsAge[i], 0), markerIdx.has(i) ? '1' : '',
+      num(track.gpsAcc[i], 1), num(track.gpsAge[i], 0),
+      num(st.deg[i], 1), num(st.latAcc[i], 2), num(st.longAcc[i], 2), markerIdx.get(i) || '',
     ].join(','));
   }
   return lines.join('\n') + '\n';
@@ -154,6 +165,7 @@ function trackFromCsv(text, filename) {
   const idx = Object.fromEntries(CSV_COLUMNS.map(c => [c, col(c)]));
   const get = (cells, c) => (idx[c] >= 0 && cells[idx[c]] !== '' && cells[idx[c]] !== undefined ? +cells[idx[c]] : NaN);
   let t0 = 0;
+  const steerCal = [];
   for (let i = 0; i < n; i++) {
     const c = rows[i + 1].split(',');
     const ts = get(c, 'timestamp_ms');
@@ -165,10 +177,12 @@ function trackFromCsv(text, filename) {
     tr.speed[i] = get(c, 'speed_kmh') / 3.6;
     tr.lat[i] = get(c, 'lat'); tr.lon[i] = get(c, 'lon');
     tr.gpsAcc[i] = get(c, 'gps_accuracy_m'); tr.gpsAge[i] = get(c, 'gps_age_ms');
-    if (get(c, 'marker') === 1) tr.markers.push(tr.t[i]);
+    const mk = idx.marker >= 0 ? (c[idx.marker] || '').trim() : '';
+    if (mk === '1') tr.markers.push(tr.t[i]);
+    if (mk === 'C') steerCal.push(ts);
   }
   tr.t0 = t0;
-  tr.meta = { name: filename, startedAt: t0 };
+  tr.meta = { name: filename, startedAt: t0, steerCal };
   return tr;
 }
 

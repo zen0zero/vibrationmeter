@@ -31,6 +31,7 @@
         <div class="tile"><span class="label">Dominant</span><span class="value" id="live-peak">–</span><span class="unit" id="live-order">Hz</span></div>
         <div class="tile"><span class="label">Sample rate</span><span class="value" id="live-rate">–</span><span class="unit">Hz</span></div>
         <div class="tile"><span class="label">GPS</span><span class="value" id="live-gps">–</span><span class="unit" id="live-gps-unit">accuracy m</span></div>
+        <div class="tile"><span class="label">Steering</span><span class="value" id="live-steer">–</span><span class="unit" id="live-steer-unit">set centre below</span></div>
         <div class="tile"><span class="label">Elapsed</span><span class="value" id="live-time">0:00</span><span class="unit" id="live-samples">0 samples</span></div>
       </div>
       <div class="card">
@@ -41,14 +42,17 @@
         <input id="rec-name" type="text" placeholder="Recording name (optional)" autocomplete="off">
         <button id="btn-start" class="big primary">Start recording</button>
         <button id="btn-mark" class="big mark" disabled>Mark “I feel it now”</button>
+        <button id="btn-centre" class="btn" disabled>Set steering centre (wheel straight, car stopped)</button>
       </div>
       <details class="help">
         <summary>How to record a useful drive</summary>
         <ol>
           <li>Mount the phone <b>rigidly</b> to the steering wheel (a clamp or strap, screen facing you). A loose mount adds its own rattle.</li>
           <li>Set tire size in <b>Vehicle</b> so vibrations can be matched to wheel rotation.</li>
+          <li>After pressing Start, park with the wheels pointing straight and tap <b>Set steering centre</b>. This lets the app measure whether the wheel is off-centre when driving straight.</li>
           <li>Press <b>Start</b> before you drive. Keep the screen on and the app in front – Android pauses sensors in the background.</li>
           <li>Include: 30 s at standstill with the engine running, steady speed through the range where you feel it (hold each speed ≥ 20 s), a few firm stops, and a couple of strong accelerations.</li>
+          <li>For wheel bearings: long sweeping curves in <b>both</b> directions at 50–100 km/h (motorway ramps, roundabouts). For CV joints: in an empty car park, pull away at full lock both ways.</li>
           <li>A passenger can press <b>Mark</b> when the vibration is felt. Don't touch the phone while driving.</li>
         </ol>
       </details>
@@ -78,6 +82,13 @@
 
         <h2>Speed</h2>
         <div class="card"><div class="chart" id="ch-speed"></div></div>
+        <h2>Steering</h2>
+        <div class="card">
+          <p class="muted small" id="steer-note"></p>
+          <div class="chart" id="ch-steer"></div>
+          <div class="legend" style="margin-top:8px">Vibration by corner direction (above 20 km/h, braking excluded)</div>
+          <div class="chart short" id="ch-turns"></div>
+        </div>
         <h2>Vibration over time</h2>
         <div class="card">
           <div class="legend"><i class="sw s1"></i>X <i class="sw s2"></i>Y <i class="sw s3"></i>Z <span class="band-key brake"></span>braking <span class="band-key accel"></span>accelerating</div>

@@ -96,7 +96,9 @@ main { max-width: 900px; margin: 0 auto; padding: 12px 16px 40px; }
 .card-h { font-weight: 600; margin-bottom: 6px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; }
 
 .tiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 12px; }
-@media (min-width: 600px) { .tiles { grid-template-columns: repeat(3, 1fr); } }
+.tiles > .tile:last-child:nth-child(odd) { grid-column: span 2; }
+@media (min-width: 600px) { .tiles > .tile:last-child:nth-child(odd) { grid-column: auto; } }
+@media (min-width: 600px) { .tiles { grid-template-columns: repeat(4, 1fr); } }
 .tile {
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
   padding: 10px 12px; display: flex; flex-direction: column; min-width: 0;

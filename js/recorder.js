@@ -35,7 +35,7 @@ export class Recorder {
     this.meta = {
       id: `rec-${startedAt}`, startedAt, name: meta.name || new Date(startedAt).toLocaleString(),
       vehicle: meta.vehicle, notes: meta.notes || '', userAgent: navigator.userAgent,
-      samples: 0, gpsFixes: 0, markers: 0, durationMs: 0, interval: null,
+      samples: 0, gpsFixes: 0, markers: 0, durationMs: 0, interval: null, steerCal: [],
     };
     this.buf = { motion: [], gps: [], marker: [] };
     this.seq = 0;
@@ -113,6 +113,15 @@ export class Recorder {
     const t = Date.now();
     this.buf.marker.push(t);
     this.meta.markers++;
+    return t;
+  }
+
+  // Driver says "the wheel is straight now": reference for the steering angle.
+  setCentre() {
+    if (!this.active) return;
+    const t = Date.now();
+    this.meta.steerCal.push(t);
+    saveSession(this.meta).catch(() => {});
     return t;
   }
 

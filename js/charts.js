@@ -49,7 +49,7 @@ function frame(ctx, box, xScale, yScale, xTicks, yTicks, opts) {
   ctx.strokeStyle = css('--axis');
   ctx.beginPath(); ctx.moveTo(x0, y1 + 0.5); ctx.lineTo(x1, y1 + 0.5); ctx.stroke();
   ctx.fillStyle = css('--muted');
-  if (opts.xLabel) { ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'; ctx.fillText(opts.xLabel, x1, box.h - 2); }
+  if (opts.xLabel) { ctx.textAlign = 'right'; ctx.textBaseline = 'top'; ctx.fillText(`→ ${opts.xLabel}`, x1, 2); }
   if (opts.yLabel) { ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillText(opts.yLabel, 4, 2); }
 }
 

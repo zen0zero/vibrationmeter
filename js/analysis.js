@@ -1,3 +1,5 @@
+import { attachSteering } from './steering.js';
+
 // Vibration analysis: resampling, spectra, order tracking against wheel speed,
 // and heuristic attribution of vibration to likely causes.
 
@@ -108,7 +110,7 @@ export function estimateRate(t) {
 export function resample(track, fs) {
   const t = track.t;
   const n = Math.max(0, Math.floor((t[track.n - 1] - t[0]) * fs));
-  const keys = ['ax', 'ay', 'az', 'ra', 'rb', 'rg', 'speed'];
+  const keys = ['ax', 'ay', 'az', 'ra', 'rb', 'rg', 'speed', 'steerDeg', 'latAcc', 'longAcc'].filter(k => track[k]);
   const out = { fs, n, t: new Float64Array(n), gap: new Uint8Array(n) };
   for (const k of keys) out[k] = new Float64Array(n);
   let j = 0;
@@ -141,6 +143,10 @@ export function analyze(track, vehicle = {}) {
   const fdr = +vehicle.finalDrive || 0;
   const cyl = +vehicle.cylinders || 4;
 
+  const st = attachSteering(track);
+  track.steerDeg = st.deg;
+  track.latAcc = st.latAcc;
+  track.longAcc = st.longAcc;
   const rawFs = estimateRate(track.t);
   const fs = Math.min(400, Math.max(10, Math.round(rawFs)));
   const r = resample(track, fs);
@@ -179,7 +185,9 @@ export function analyze(track, vehicle = {}) {
     const speed = vN > N * 0.8 ? vSum / vN : NaN;
     const q = Math.floor(N / 4);
     const vA = avgFinite(r.speed, s, s + q), vB = avgFinite(r.speed, s + N - q, s + N);
-    const accel = (vB - vA) / ((N - q) / fs);
+    const gpsAccel = (vB - vA) / ((N - q) / fs);
+    // Accelerometer braking/acceleration g is lag-free; GPS speed change is the fallback.
+    const accel = r.longAcc && countFinite(r.longAcc, s, s + N) > N / 2 ? avgFinite(r.longAcc, s, s + N) : gpsAccel;
     let band = 0, peakK = kMin, peakP = -1;
     for (let k = kMin; k <= kMax; k++) {
       band += spec[k];
@@ -188,11 +196,18 @@ export function analyze(track, vehicle = {}) {
     let gband = 0;
     if (gspec) for (let k = kMin; k <= kMax; k++) gband += gspec[k];
     const axisRms = [ax, ay, az].map(x => rmsOf(x, s, s + N));
+    const steer = avgFinite(r.steerDeg, s, s + N);
+    const steerAbs = avgFinite(r.steerDeg.map(Math.abs), s, s + N);
+    let sMin = Infinity, sMax = -Infinity;
+    for (let i = s; i < s + N; i++) { const d = r.steerDeg[i]; if (Number.isFinite(d)) { sMin = Math.min(sMin, d); sMax = Math.max(sMax, d); } }
+    const steerRange = sMax - sMin;
+    const latAcc = countFinite(r.latAcc, s, s + N) > N / 2 ? avgFinite(r.latAcc, s, s + N) : NaN;
     const w = {
       t0: r.t[s], tMid: r.t[s + half], speed, speedMin: vMin, speedMax: vMax, accel,
       spec, gspec, rms: Math.sqrt(band), gyroRms: Math.sqrt(gband), axisRms,
-      peakHz: peakK * df, gap,
+      peakHz: peakK * df, gap, steer, steerAbs, steerRange, latAcc,
     };
+    w.turn = turnOf(w);
     w.state = classify(w);
     windows.push(w);
   }
@@ -201,12 +216,19 @@ export function analyze(track, vehicle = {}) {
     fs, rawFs, N, df, nyq, freqs, kMin, kMax, windows, circumference: C, finalDrive: fdr,
     cylinders: cyl, hasGyro, duration: track.t[track.n - 1] - track.t[0], samples: track.n,
     markers: track.markers, hasSpeed: windows.some(w => Number.isFinite(w.speed)),
+    steering: steeringSummary(st, r),
   };
-  res.orders = orderSpectrum(res, w => w.state === 'cruise' || w.state === 'transient');
+  // Prefer straight-line windows for order analysis: corners add their own vibration.
+  const steady = w => w.state === 'cruise' || w.state === 'transient';
+  const straightSteady = w => steady(w) && w.turn === 'straight';
+  const nStraight = windows.filter(w => straightSteady(w) && w.speed >= MIN_ORDER_SPEED).length;
+  res.orders = orderSpectrum(res, nStraight >= 6 ? straightSteady : steady);
+  res.ordersStraightOnly = nStraight >= 6;
   res.ordersBrake = orderSpectrum(res, w => w.state === 'braking');
   res.ordersAccel = orderSpectrum(res, w => w.state === 'accel');
   res.hzSpectrum = hzSpectrum(res, w => w.state !== 'idle' && Number.isFinite(w.speed) && w.speed >= MIN_ORDER_SPEED);
   res.bands = speedBands(res);
+  res.turnBands = turnBands(res);
   res.campbell = campbell(res);
   res.findings = diagnose(res);
   return res;
@@ -216,6 +238,61 @@ function avgFinite(x, a, b) {
   let s = 0, n = 0;
   for (let i = a; i < b; i++) if (Number.isFinite(x[i])) { s += x[i]; n++; }
   return n ? s / n : NaN;
+}
+
+function countFinite(x, a, b) {
+  let n = 0;
+  for (let i = a; i < b; i++) if (Number.isFinite(x[i])) n++;
+  return n;
+}
+
+// Direction of the corner from GPS cornering acceleration (what loads the bearings).
+function turnOf(w) {
+  if (!(w.speed >= MIN_ORDER_SPEED)) return null;
+  if (Number.isFinite(w.latAcc)) {
+    if (w.latAcc > 0.8) return 'left';
+    if (w.latAcc < -0.8) return 'right';
+    if (Math.abs(w.latAcc) < 0.3 && !(w.steerAbs > 20)) return 'straight';
+    return 'mild';
+  }
+  return null;
+}
+
+function steeringSummary(st, r) {
+  if (!st.valid) return { valid: false, planeG: st.planeG };
+  // ~5 Hz series for charting
+  const step = Math.max(1, Math.round(r.fs / 5));
+  const t = [], deg = [];
+  for (let i = 0; i < r.n; i += step) { t.push(r.t[i]); deg.push(r.steerDeg[i]); }
+  const lat = [];
+  for (let i = 0; i < r.n; i += step) lat.push(r.latAcc[i]);
+  return { valid: true, centre: st.centre, straightOffset: st.straightOffset, gyroUsed: st.gyroUsed, t, deg, lat,
+    latSource: st.latSource, longSource: st.longSource };
+}
+
+function turnBands(res) {
+  const out = [];
+  for (const turn of ['left', 'straight', 'right']) {
+    const ws = res.windows.filter(w => w.turn === turn && w.state !== 'braking');
+    if (!ws.length) continue;
+    out.push({ turn, n: ws.length, rms: Math.sqrt(ws.reduce((a, w) => a + w.rms * w.rms, 0) / ws.length),
+      gyroRms: Math.sqrt(ws.reduce((a, w) => a + w.gyroRms * w.gyroRms, 0) / ws.length) });
+  }
+  return out;
+}
+
+// Mean ratio of `key` in windows matching `pickA` over speed-matched windows matching `pickB`.
+function matchedRatio(res, pickA, pickB, key = 'rms', tolKmh = 12) {
+  const A = res.windows.filter(pickA), B = res.windows.filter(pickB);
+  let sum = 0, n = 0;
+  for (const a of A) {
+    const refs = B.filter(b => Math.abs(b.speed - a.speed) * 3.6 <= tolKmh);
+    if (!refs.length) continue;
+    const ref = Math.sqrt(refs.reduce((s, b) => s + b[key] * b[key], 0) / refs.length);
+    if (!(ref > 0)) continue;
+    sum += a[key] / ref; n++;
+  }
+  return n ? { ratio: sum / n, n } : null;
 }
 
 function rmsOf(x, a, b) {
@@ -533,6 +610,8 @@ export function diagnose(res) {
     }
   }
 
+  steeringFindings(res, add);
+
   if (!F.some(f => f.severity === 'warning')) {
     add({ id: 'none', severity: 'good', confidence: 0.5,
       title: 'No dominant periodic vibration found',
@@ -557,4 +636,91 @@ export function liveSpectrum(xs, ys, zs, fs) {
   let pk = kMin, tot = 0;
   for (let k = kMin; k <= kMax; k++) { tot += spec[k]; if (spec[k] > spec[pk]) pk = k; }
   return { spec, df, peakHz: pk * df, rms: Math.sqrt(tot), kMin, kMax };
+}
+
+function steeringFindings(res, add) {
+  const st = res.steering;
+  if (!st || !st.valid) {
+    if (st && Number.isFinite(st.planeG)) {
+      add({ id: 'nosteer', severity: 'info', title: 'Steering angle not available',
+        detail: 'The phone is too close to horizontal to read the steering-wheel angle from gravity. Mount it on the rim with the screen facing you.' });
+    }
+    return;
+  }
+  const notBraking = w => w.state !== 'braking' && w.state !== 'gap';
+  const straight = w => w.turn === 'straight' && notBraking(w);
+
+  // Wheel bearings: a corner loads the wheels on the outside of the turn.
+  const L = matchedRatio(res, w => w.turn === 'left' && notBraking(w), straight);
+  const R = matchedRatio(res, w => w.turn === 'right' && notBraking(w), straight);
+  const lr = L && R ? L.ratio / R.ratio : NaN;
+  const pickSide = (worse, other, dirWord, side) => {
+    add({ id: `bearing-${side}`, severity: 'warning',
+      confidence: clamp01((worse.ratio - 1.2) / 1.2) * (other ? clamp01((worse.ratio / other.ratio - 1.1) / 0.6) : 0.6),
+      title: `Wheel bearing – ${side} side suspected`,
+      detail: `Vibration is ${worse.ratio.toFixed(1)}× stronger in ${dirWord} corners than when driving straight at the same speed` +
+        (other ? ` (and ${(worse.ratio / other.ratio).toFixed(1)}× stronger than in the opposite corners)` : '') + '. ' +
+        `A ${dirWord} corner shifts weight onto the ${side}-hand wheels, and a worn bearing gets louder and rougher when loaded. ` +
+        `Check the ${side} wheel bearings (front first): with the car lifted, rock the wheel at 12 and 6 o'clock and spin it by hand to feel roughness. ` +
+        'Uneven tire wear on one side can also do this.',
+      evidence: { left: L, right: R } });
+  };
+  if (L && L.n >= 2 && L.ratio >= 1.35 && (!R || lr >= 1.3)) pickSide(L, R, 'left', 'right');
+  else if (R && R.n >= 2 && R.ratio >= 1.35 && (!L || lr <= 1 / 1.3)) pickSide(R, L, 'right', 'left');
+  else if (L && R && L.n >= 2 && R.n >= 2 && L.ratio >= 1.35 && R.ratio >= 1.35) {
+    add({ id: 'corners', severity: 'info', confidence: clamp01((Math.min(L.ratio, R.ratio) - 1.2) / 1.5) * 0.7,
+      title: 'Vibration increases in any corner',
+      detail: `Vibration is ${L.ratio.toFixed(1)}× (left corners) and ${R.ratio.toFixed(1)}× (right corners) stronger than straight driving. ` +
+        'Cornering in both directions points at worn suspension bushings, CV joints or tires with irregular (cupped) wear rather than one bearing.' });
+  }
+
+  // Outer CV joints: large steering angle while pulling away.
+  const bigLock = w => w.steerAbs > 90 && w.accel > 0.3 && w.speed > 1 && w.speed < 30 / 3.6;
+  const lowStraight = w => w.steerAbs < 30 && w.speed > 1 && w.speed < 30 / 3.6 && w.state !== 'idle' && w.state !== 'gap';
+  const cv = matchedRatio(res, bigLock, lowStraight, 'rms', 15);
+  if (cv && cv.n >= 1 && cv.ratio >= 1.6) {
+    const locks = res.windows.filter(bigLock);
+    const leftN = locks.filter(w => w.steer > 0).length;
+    const dir = leftN > locks.length * 0.7 ? 'left' : leftN < locks.length * 0.3 ? 'right' : null;
+    add({ id: 'cvouter', severity: 'warning', confidence: clamp01((cv.ratio - 1.4) / 1.5),
+      title: 'Outer CV joint (vibration at full lock under power)',
+      detail: `Accelerating with the wheel turned more than 90° produces ${cv.ratio.toFixed(1)}× more vibration than pulling away straight` +
+        (dir ? `, mostly when turning ${dir}` : '') + '. A worn outer constant-velocity joint clicks or judders at large steering angles under load. ' +
+        'Check both outer CV boots for tears and grease; a torn boot usually means the joint is worn. ' +
+        'Confirm in an empty car park: full lock, accelerate gently, listen for clicking.',
+      evidence: cv });
+  }
+
+  // Wheel off-centre when driving straight (only measurable with a centre calibration).
+  const off = st.straightOffset;
+  if (Number.isFinite(off) && Math.abs(off) >= 3) {
+    const side = off > 0 ? 'left' : 'right';
+    add({ id: 'offcentre', severity: Math.abs(off) >= 5 ? 'warning' : 'info', confidence: clamp01((Math.abs(off) - 2) / 8),
+      title: `Steering wheel ${Math.abs(off).toFixed(0)}° to the ${side} when driving straight`,
+      detail: `Compared with the centre you set, the wheel sits ${Math.abs(off).toFixed(1)}° to the ${side} to keep the car straight. ` +
+        `That means the car pulls to the ${off > 0 ? 'right' : 'left'} or the steering is off-centre: check tire pressures first, then wheel alignment (toe/camber), ` +
+        'a sticking brake caliper, or a tire with a shifted belt (swap front tires left↔right to test). Road camber alone can account for 1–3°.',
+      evidence: { offsetDeg: off } });
+  }
+
+  // Steering shake that depends on steering angle.
+  if (res.hasGyro) {
+    // Only windows where the wheel is held still, so steering movements don't count as shake.
+    const held = w => w.steerRange < 4 && w.speed > 40 / 3.6 && notBraking(w);
+    const onCentre = w => held(w) && w.steerAbs < 5;
+    const offCentre = w => held(w) && w.steerAbs > 12;
+    const sh = matchedRatio(res, onCentre, offCentre, 'gyroRms', 15);
+    const level = Math.max(...res.windows.filter(w => onCentre(w) || offCentre(w)).map(w => w.gyroRms), 0);
+    if (sh && sh.n >= 3 && res.windows.filter(offCentre).length >= 3 && level >= 1.5 &&
+        (sh.ratio >= 1.8 || sh.ratio <= 1 / 1.8)) {
+      const centre = sh.ratio >= 1.8;
+      add({ id: 'shimmyangle', severity: 'info', confidence: clamp01((Math.max(sh.ratio, 1 / sh.ratio) - 1.5) / 2) * 0.6,
+        title: centre ? 'Steering shake strongest around centre' : 'Steering shake grows with steering angle',
+        detail: centre
+          ? `The steering wheel shakes ${sh.ratio.toFixed(1)}× more when held straight than when turned. Cornering load takes up play in the steering, ` +
+            'so shake that disappears when you turn often means play in tie-rod ends, the steering rack or ball joints – combined with any wheel imbalance.'
+          : `The steering wheel shakes ${(1 / sh.ratio).toFixed(1)}× more when turned than when straight. Look at worn ball joints, strut top mounts or tie-rod ends.`,
+        evidence: sh });
+    }
+  }
 }

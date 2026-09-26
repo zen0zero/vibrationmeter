@@ -4,6 +4,7 @@ import { trackFromRecording, trackFromFile, toCsv, toJson, download, fileStamp }
 import { analyze, liveSpectrum, highPass, tireCircumference, vehicleCircumference } from './analysis.js';
 import { lineChart, heatmap, barChart } from './charts.js';
 import { simulateDrive } from './sim.js';
+import { fmtSteer } from './steering.js';
 
 const $ = s => document.querySelector(s);
 const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -91,6 +92,10 @@ $('#btn-start').addEventListener('click', async () => {
     btn.textContent = 'Stop recording';
     btn.classList.add('stop');
     $('#btn-mark').disabled = false;
+    $('#btn-centre').disabled = false;
+    liveSteer = { cont: NaN, prev: NaN, zero: NaN };
+    $('#live-steer').textContent = '–';
+    $('#live-steer-unit').textContent = 'set centre below';
     $('#rec-name').disabled = true;
     liveTimer = setInterval(updateLive, 250);
     renderAlerts();
@@ -102,6 +107,7 @@ $('#btn-start').addEventListener('click', async () => {
     btn.textContent = 'Start recording';
     btn.classList.remove('stop');
     $('#btn-mark').disabled = true;
+    $('#btn-centre').disabled = true;
     $('#rec-name').disabled = false;
     $('#rec-name').value = '';
     renderAlerts();
@@ -116,6 +122,29 @@ $('#btn-mark').addEventListener('click', () => {
   setTimeout(() => b.classList.remove('flash'), 400);
   if (navigator.vibrate) navigator.vibrate(60);
 });
+
+$('#btn-centre').addEventListener('click', () => {
+  recorder.setCentre();
+  liveSteer.zero = liveSteer.cont;
+  toast('Steering centre set');
+});
+
+// Live steering angle from gravity across the screen (unwrapped past ±180°).
+let liveSteer = { cont: NaN, prev: NaN, zero: NaN };
+function updateLiveSteer(L) {
+  const k = Math.min(15, L.x.length);
+  let sx = 0, sy = 0;
+  for (let i = L.x.length - k; i < L.x.length; i++) { sx += L.x[i]; sy += L.y[i]; }
+  if (Math.hypot(sx / k, sy / k) < 2.5) { $('#live-steer').textContent = '–'; $('#live-steer-unit').textContent = 'phone too flat'; return; }
+  const a = Math.atan2(sx, sy) * 180 / Math.PI;
+  if (!Number.isFinite(liveSteer.prev)) liveSteer.cont = a;
+  else liveSteer.cont += a - liveSteer.prev - 360 * Math.round((a - liveSteer.prev) / 360);
+  liveSteer.prev = a;
+  if (Number.isFinite(liveSteer.zero)) {
+    $('#live-steer').textContent = fmtSteer(liveSteer.cont - liveSteer.zero);
+    $('#live-steer-unit').textContent = 'from centre';
+  }
+}
 
 let liveTick = 0;
 function updateLive() {
@@ -140,6 +169,7 @@ function updateLive() {
       $('#live-order').textContent = speed > 3 ? `Hz · ${(s.peakHz / (speed / C)).toFixed(2)}× wheel` : 'Hz';
     }
   }
+  if (L.x.length > 0) updateLiveSteer(L);
   if (liveTick++ % 2 === 0 && L.x.length > 16) drawLive(L, rate);
 }
 
@@ -280,7 +310,9 @@ function renderAnalysis() {
     `${res.samples.toLocaleString()} samples at ${res.rawFs.toFixed(0)} Hz · wheel circumference ${res.circumference.toFixed(3)} m` +
     `${vehicle.tire ? ` (${esc(vehicle.tire)})` : ''}<br>` +
     `Analysis windows (${(res.N / res.fs).toFixed(1)} s): ` +
-    Object.entries(counts).map(([k, v]) => `${v} ${STATE_LABEL[k] || k}`).join(', ');
+    Object.entries(counts).map(([k, v]) => `${v} ${STATE_LABEL[k] || k}`).join(', ') +
+    (res.steering.valid ? `<br>Steering centre from ${esc(res.steering.centre)}; cornering g from ${esc(res.steering.latSource || 'n/a')}, ` +
+      `braking/acceleration g from ${esc(res.steering.longSource || 'n/a')}` : '');
 
   $('#an-findings').innerHTML = res.findings.map(f => {
     const [ico, tag] = SEV[f.severity] || SEV.info;
@@ -309,6 +341,8 @@ function drawAnalysisCharts() {
     vlines: markers,
     extraTip: i => `<div class="muted">${STATE_LABEL[W[i].state]}</div>`,
   });
+
+  drawSteering(res, tFmt, markers, tMax);
 
   // Vibration RMS per axis with braking / acceleration bands.
   const half = res.N / 2 / res.fs;
@@ -390,6 +424,36 @@ function drawAnalysisCharts() {
   }));
   if (items.length) barChart($('#ch-bands'), { items, yFmt: v => v.toFixed(2), xLabel: 'km/h', yLabel: 'm/s² RMS' });
   else emptyChart($('#ch-bands'), 'No GPS speed in this recording.');
+}
+
+function drawSteering(res, tFmt, markers, tMax) {
+  const st = res.steering;
+  if (!st.valid) {
+    $('#steer-note').textContent = 'Steering angle unavailable: the phone was too close to horizontal. Mount it on the rim, screen facing you.';
+    emptyChart($('#ch-steer'), 'No steering data.');
+    emptyChart($('#ch-turns'), 'No steering data.');
+    return;
+  }
+  $('#steer-note').textContent = 'Steering-wheel angle (positive = left) estimated from gravity and the gyro. ' +
+    (st.centre === 'calibration' ? 'Zero = the centre you set.' : 'Zero = average angle while driving straight (tap “Set steering centre” while recording to measure off-centre steering).');
+  lineChart($('#ch-steer'), {
+    x: st.t, xMin: 0, xMax: tMax, vlines: markers,
+    series: [{ name: 'Steering', color: cssVar('--s1'), y: st.deg }],
+    xFmt: tFmt, yFmt: v => v.toFixed(0), yFmtTip: fmtSteer, xLabel: 'time', yLabel: '° (+ left)',
+    extraTip: i => (Number.isFinite(st.lat[i]) ? `<div class="muted">cornering ${(Math.abs(st.lat[i]) / 9.81).toFixed(2)} g${Math.abs(st.lat[i]) < 0.1 ? '' : st.lat[i] > 0 ? ' left' : ' right'}</div>` : ''),
+  });
+  const label = { left: 'Left corners', straight: 'Straight', right: 'Right corners' };
+  if (res.turnBands.length) {
+    barChart($('#ch-turns'), {
+      yFmt: v => v.toFixed(2), yLabel: 'm/s² RMS',
+      items: res.turnBands.map(b => ({
+        label: b.turn, value: b.rms, color: cssVar('--s1'),
+        tip: `<div class="tip-h">${label[b.turn]}</div><div>Vibration: <b>${b.rms.toFixed(3)} m/s²</b></div><div class="muted">${b.n} windows</div>`,
+      })),
+    });
+  } else {
+    emptyChart($('#ch-turns'), 'Needs corners above 20 km/h with GPS speed.');
+  }
 }
 
 function emptyChart(el, msg) {
