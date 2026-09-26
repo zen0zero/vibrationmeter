@@ -58,27 +58,42 @@ The JSON export keeps the unmodified GPS fixes (1 Hz, with their own timestamps)
 
 The **Record** tab has a guided-test list. A test records a labelled stretch under known conditions and starts the recording if needed.
 Parked tests are timed, with a countdown and beeps so your hands can stay off the wheel. Driving tests are started and ended by a passenger.
-Enter the speed where you feel the vibration, and the driving instructions use it.
+You don't enter the speed where it vibrates: the analysis finds the worst speed band and judges the driving tests there.
+Tests that don't apply to the car are hidden, based on the **Gearbox** setting in Vehicle.
 
 | test | conditions | what it tells the analysis |
 |---|---|---|
 | Engine off | parked, wheels straight, hands off (15 s) | sensor noise floor, loose mount; sets the steering centre |
 | Tap test | tap the rim once a second (10 s) | ringing frequency of steering column + mount; explains speed-band humps and fixed-frequency peaks |
-| Idle | P/N, A/C off (20 s) | engine baseline, firing frequency → idle rpm |
+| Idle | neutral, A/C off (20 s) | engine baseline; idle rpm from a comb over half/crank/firing orders; uneven running (misfire) |
 | Idle with A/C on | (20 s, optional) | mounts / idle speed control / compressor, if vibration rises |
-| In gear, brake held | automatic in D (15 s, optional) | engine/gearbox mounts, if vibration rises well above idle |
-| Slow rev | to ~3000 rpm and back (30 s, optional) | engine/exhaust resonance with no road input |
+| In gear, brake held | automatics only (15 s, optional) | engine/gearbox mounts, if vibration rises well above idle |
+| Rev steps | hold 1500 / 2000 / 2500 / 3000 rpm, 12 s each (optional) | vibration by rpm, resonance at one rpm, where each engine frequency lands after fold-back, and the neutral run-up verdict |
+| Slow rev | to ~3000 rpm and back (30 s, optional) | resonances between the steps |
 | Lock-to-lock | full left → full right (25 s, optional) | steering range; unequal left/right = wheel off-centre on the rack; shudder at lock |
-| Steady cruise | at the problem speed, ≥ 20 s | reference for the next two |
-| Coast in neutral | roll down through the problem speed | unchanged → wheels/tires/brakes/bearings; disappears → engine or drivetrain under load |
-| Same speed, lower gear | ≥ 20 s (optional) | changes → engine-rpm related |
+| Speed steps | hold 30, 50, 70 … 130 km/h, ~15 s each | steady data over the whole range, to find the worst band |
+| Coast in neutral | from the top speed down to ~40 km/h | at the worst band: unchanged → wheels/tires/brakes/bearings; disappears → engine or drivetrain under load |
+| One gear lower | several speeds (optional) | changes → engine-rpm related |
+| Pull away | manual only: from standstill in 1st, three times (optional) | clutch judder, flywheel, engine/gearbox mounts |
 | Braking | firm, 90 → 20 km/h, twice (optional) | repeatable brake-judder data |
 
+**Repeating tests.** Every run is saved. Runs of the same test in a recording are pooled: their spectra are averaged,
+weighted by length. With three or more runs, one that is more than 40 % off the median is discarded.
+The table shows the run count and spread, and the app warns when repeated parked runs disagree.
+That usually means the radiator fan or A/C cycled, or the engine was still cold.
+
+**Engine frequencies and the 60 Hz limit.** A 4-cylinder fires twice per crank turn. That is about 26 Hz at idle, which is measurable,
+but 50–100 Hz at 1500–3000 rpm, which is above the ~30 Hz limit. Those vibrations fold back to a lower frequency: at 2000 rpm, 67 Hz shows up at ~7 Hz.
+At a known rpm the fold-back is predictable, so the rev-step analysis labels such peaks as engine.
+A fixed-frequency peak while driving that sits on one of these folded engine lines is reported as probably engine-related.
+
+**Neutral run-up without knowing the driving rpm.** If the parked engine stays well below the vibration of the worst driving speed band at
+every rev step, the engine is ruled out as the main source. If one step matches the driving level, the engine can explain it.
+
 For the level-based comparisons (A/C, in gear), the app uses the larger of two ratios against idle: overall vibration, and vibration at the idle firing frequency.
-Coast and gear tests are compared with steady driving at the same speed (±6 km/h).
-Results appear in a **Guided tests** table in the Analysis tab. They also appear as findings, and they sharpen other findings,
-for example "this speed-band hump is where the wheels turn at the tap-test resonance".
-The CSV `test` column records which test each sample belongs to.
+Coast and gear tests are compared with steady driving at the same speed (±6 km/h), within the worst band when the test reached it.
+Results appear in a **Guided tests** table in the Analysis tab and as findings.
+The CSV `test` column records which test each sample belongs to (`rev_2000`, `coast`, …).
 
 ## Steering angle and cornering g
 
@@ -152,6 +167,6 @@ js/analysis.js        FFT, order tracking, diagnosis heuristics
 js/tests.js           guided test definitions and their analysis
 js/steering.js        steering angle, cornering and braking g from gravity + gyro + GPS
 js/charts.js          canvas charts with touch tooltips
-js/sim.js             synthetic demo drive (baseline tests, imbalance, brake judder, right wheel bearing, neutral coast)
+js/sim.js             synthetic demo drive (baseline and rev steps, imbalance, brake judder, right wheel bearing, neutral coast)
 sw.js                 offline cache
 ```

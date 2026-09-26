@@ -47,10 +47,7 @@
       </div>
       <div class="card" id="tests-card">
         <div class="card-h">Guided tests</div>
-        <p class="muted small">Known conditions make the diagnosis much sharper. Start with the parked baseline (about 3 minutes), then do the driving tests with a passenger holding the phone. Starting a test starts the recording if needed.</p>
-        <label class="inline-field">Speed where you feel the vibration
-          <span><input id="problem-speed" type="number" inputmode="numeric" min="20" max="200" step="5" placeholder="100"> km/h</span>
-        </label>
+        <p class="muted small">Known conditions make the diagnosis much sharper. Start with the parked baseline (about 3 minutes, engine warm), then do the driving tests with a passenger holding the phone. You don't need to know where it vibrates – the analysis finds the worst speed. Starting a test starts the recording if needed.</p>
         <h3>Parked baseline</h3>
         <button id="btn-baseline" class="btn primary-outline">Run baseline sequence</button>
         <ul id="tests-baseline" class="test-list"></ul>
@@ -144,6 +141,9 @@
         <label>Rolling circumference override (m) <input name="circumference" type="number" step="0.001" min="0.5" max="5" placeholder="auto from tire size"></label>
         <label>Final drive ratio (optional) <input name="finalDrive" type="number" step="0.01" min="1" max="8" placeholder="e.g. 3.91"></label>
         <label>Engine cylinders <input name="cylinders" type="number" step="1" min="1" max="16" placeholder="4"></label>
+        <label>Gearbox
+          <select name="gearbox"><option value="manual">Manual</option><option value="automatic">Automatic</option></select>
+        </label>
         <label>Drive
           <select name="drive"><option value="FWD">Front-wheel drive</option><option value="RWD">Rear-wheel drive</option><option value="AWD">All-wheel drive</option></select>
         </label>

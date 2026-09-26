@@ -5,7 +5,7 @@ import { analyze, liveSpectrum, highPass, tireCircumference, vehicleCircumferenc
 import { lineChart, heatmap, barChart } from './charts.js';
 import { simulateDrive } from './sim.js';
 import { fmtSteer } from './steering.js';
-import { TESTS, TEST_BY_ID, testText } from './tests.js';
+import { TEST_BY_ID, testsFor } from './tests.js';
 
 const $ = s => document.querySelector(s);
 const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -43,7 +43,7 @@ function loadVehicle() {
 function currentVehicle() {
   const f = $('#vehicle-form');
   const v = Object.fromEntries(new FormData(f).entries());
-  return { tire: v.tire.trim(), circumference: v.circumference, finalDrive: v.finalDrive, cylinders: v.cylinders || '4', drive: v.drive, notes: v.notes };
+  return { tire: v.tire.trim(), circumference: v.circumference, finalDrive: v.finalDrive, cylinders: v.cylinders || '4', gearbox: v.gearbox, drive: v.drive, notes: v.notes };
 }
 function updateTireInfo() {
   const v = currentVehicle();
@@ -158,13 +158,6 @@ function updateLiveSteer(L) {
 
 // ---------- guided tests ----------
 const testState = { active: null, queue: [], done: {}, timer: null, acc: 0, n: 0 };
-const PROBLEM_KEY = 'vm.problemSpeed';
-try { $('#problem-speed').value = localStorage.getItem(PROBLEM_KEY) || ''; } catch (_) { /* ignore */ }
-$('#problem-speed').addEventListener('input', () => {
-  try { localStorage.setItem(PROBLEM_KEY, $('#problem-speed').value); } catch (_) { /* ignore */ }
-  renderTests();
-});
-const problemSpeed = () => +$('#problem-speed').value || 100;
 
 let audioCtx = null;
 function beep(freq = 880, ms = 150) {
@@ -180,12 +173,12 @@ function beep(freq = 880, ms = 150) {
 
 function renderTests() {
   for (const group of ['baseline', 'driving']) {
-    $(`#tests-${group}`).innerHTML = TESTS.filter(t => t.group === group).map(t => {
-      const d = testState.done[t.id];
+    $(`#tests-${group}`).innerHTML = testsFor(currentVehicle()).filter(t => t.group === group).map(t => {
+      const d = t.steps ? (t.steps.every(id => testState.done[id]) ? { rms: Math.max(...t.steps.map(id => testState.done[id].rms)) } : null) : testState.done[t.id];
       return `<li class="test-item${d ? ' done' : ''}">
         <div class="t-main">
           <div class="t-title">${d ? '<span class="ok">✓</span> ' : ''}${esc(t.title)}${t.optional ? ' <span class="muted small">optional</span>' : ''}${t.timed ? ` <span class="muted small">${t.timed} s</span>` : ''}</div>
-          <div class="muted small">${d ? `Measured ${d.rms.toFixed(3)} m/s²` : esc(t.why)}</div>
+          <div class="muted small">${d ? `Measured ≈ ${d.rms.toFixed(3)} m/s²${t.steps ? ' (max)' : ''} · run again to average` : esc(t.why)}</div>
         </div>
         <button class="btn" data-test="${t.id}" ${testState.active ? 'disabled' : ''}>${d ? 'Redo' : 'Run'}</button>
       </li>`;
@@ -207,7 +200,7 @@ function prepareTest(id) {
   showTestPanel(`
     <div class="t-step muted small">${t.group === 'baseline' ? 'Parked baseline' : 'Driving test – passenger operates the phone'}${left ? ` · ${left} more after this` : ''}</div>
     <div class="t-head">${esc(t.title)}</div>
-    <p class="t-how">${esc(testText(t.how, problemSpeed()))}</p>
+    <p class="t-how">${esc(t.how)}</p>
     <div id="t-warn"></div>
     <div class="row-actions">
       <button class="big primary" id="t-begin">${t.timed ? 'Begin' : 'Start test'}</button>
@@ -231,11 +224,11 @@ async function beginTest(id) {
     return;
   }
   testState.active = { id, phase: 'countdown' };
-  let n = t.timed ? 3 : 0;
+  let n = t.timed ? (t.prep || 3) : 0;
   const tick = () => {
     if (!testState.active || testState.active.id !== id) return;
     if (n > 0) {
-      showTestPanel(`<div class="t-head">${esc(t.title)}</div><div class="t-count">${n}</div><p class="muted">Get ready – hands off the wheel.</p>`);
+      showTestPanel(`<div class="t-head">${esc(t.title)}</div><div class="t-count">${n}</div><p class="muted">${esc(t.prepText || 'Get ready – hands off the wheel.')}</p>`);
       beep(660, 80);
       n--;
       testState.timer = setTimeout(tick, 1000);
@@ -259,7 +252,7 @@ function measure(id) {
     if (t.timed) {
       const left = Math.max(0, t.timed - el);
       showTestPanelOnce(id, `<div class="t-head">${esc(t.title)}</div>
-        <p class="t-how">${esc(testText(t.how, problemSpeed()))}</p>
+        <p class="t-how">${esc(t.how)}</p>
         <div class="progress"><div id="t-bar"></div></div>
         <div class="muted small" id="t-status"></div>
         <div class="row-actions"><button class="btn" id="t-cancel2">Cancel</button></div>`);
@@ -268,7 +261,7 @@ function measure(id) {
       if (left <= 0) return finishTest(id);
     } else {
       showTestPanelOnce(id, `<div class="t-head">${esc(t.title)}</div>
-        <p class="t-how">${esc(testText(t.how, problemSpeed()))}</p>
+        <p class="t-how">${esc(t.how)}</p>
         <div class="muted small" id="t-status"></div>
         <div class="row-actions"><button class="big primary" id="t-done">Done</button></div>
         <div class="row-actions"><button class="btn" id="t-cancel2">Cancel</button></div>`);
@@ -320,12 +313,16 @@ function cancelTest() {
 
 document.querySelector('#view-record').addEventListener('click', e => {
   const b = e.target.closest('button[data-test]');
-  if (b) { testState.queue = []; prepareTest(b.dataset.test); }
-});
-$('#btn-baseline').addEventListener('click', () => {
-  testState.queue = TESTS.filter(t => t.group === 'baseline').map(t => t.id);
+  if (!b) return;
+  const t = TEST_BY_ID[b.dataset.test];
+  testState.queue = t.steps ? [...t.steps] : [t.id];
   prepareTest(testState.queue.shift());
 });
+$('#btn-baseline').addEventListener('click', () => {
+  testState.queue = testsFor(currentVehicle()).filter(t => t.group === 'baseline').flatMap(t => t.steps || [t.id]);
+  prepareTest(testState.queue.shift());
+});
+$('#vehicle-form').addEventListener('input', () => { if (!testState.active) renderTests(); });
 renderTests();
 
 let liveTick = 0;

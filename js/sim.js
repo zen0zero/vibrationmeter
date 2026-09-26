@@ -1,6 +1,7 @@
 // Synthetic drive for the demo and for testing the analysis: a car with an
 // unbalanced front wheel (resonating near 100 km/h), brake judder, a worn right
-// wheel bearing (rougher in left corners) and a smooth idle.
+// wheel bearing (rougher in left corners), a smooth 4-cylinder engine and a
+// parked baseline including rev steps.
 import { MS, GS } from './format.js';
 import { vehicleCircumference } from './analysis.js';
 
@@ -30,6 +31,18 @@ const SEGMENTS = [
 ];
 const ENGINE_START = 32, TAP_HZ = 14, IN_GEAR = [60, 75];
 
+// Parked rev steps inserted after the baseline: everything from 100 s on moves by REV_SHIFT.
+const REV_SHIFT = 80;
+const shift = keys => keys.map(([t, ...rest]) => [t >= 100 ? t + REV_SHIFT : t, ...rest]);
+PROFILE.splice(0, PROFILE.length, ...shift(PROFILE));
+STEER.splice(0, STEER.length, ...shift(STEER));
+SEGMENTS.splice(0, SEGMENTS.length, ...SEGMENTS.map(([id, a, b]) => (a >= 100 ? [id, a + REV_SHIFT, b + REV_SHIFT] : [id, a, b])),
+  ['pullaway', 180, 192],
+  ['rev_1500', 86, 98], ['rev_2000', 102, 114], ['rev_2500', 118, 130], ['rev_3000', 134, 146]);
+// Engine rpm while parked [time s, rpm]; while driving the engine is modelled at idle-like firing.
+const RPM = [[0, 780], [80, 780], [85, 1500], [99, 1500], [101, 2000], [115, 2000], [117, 2500], [131, 2500],
+  [133, 3000], [147, 3000], [152, 780], [1000, 780]];
+
 const lerp = (keys, t, scale = 1) => {
   for (let i = 1; i < keys.length; i++) {
     const [t1, v1] = keys[i];
@@ -53,6 +66,7 @@ const STEERING_RATIO = 15, WHEELBASE = 2.65, WHEEL_TILT = 25 * Math.PI / 180;
 
 export function simulateDrive(vehicle = {}, {
   fs = 60, seed = 7, imbalance = true, brakeJudder = true, bearing = 'right', cvJoint = false, pullDeg = 0, mountFactor = 1.2,
+  resonanceRpm = 0, misfire = false, clutchJudder = false,
 } = {}) {
   const rand = rng(seed);
   const gauss = () => {
@@ -78,7 +92,8 @@ export function simulateDrive(vehicle = {}, {
     const fw = v / C;
     const dt = (1 / fs) * (0.9 + 0.2 * rand());
     wheelPhase += 2 * Math.PI * fw * dt;
-    enginePhase += 2 * Math.PI * 26 * dt; // ~780 rpm 4-cyl firing frequency
+    const rpm = v < 0.5 ? lerp(RPM, t) : 780;
+    enginePhase += 2 * Math.PI * (rpm / 60) * dt; // crankshaft angle
     heading -= yaw * dt;                   // compass heading is clockwise
     lat += v * Math.cos(heading) * dt / 111320;
     lon += v * Math.sin(heading) * dt / (111320 * Math.cos(lat * Math.PI / 180));
@@ -93,7 +108,12 @@ export function simulateDrive(vehicle = {}, {
     const load = bearing === 'right' ? aLat : bearing === 'left' ? -aLat : 0;
     if (bearing && v > 5) road += 0.005 * v * Math.max(0, load);
     if (cvJoint && Math.abs(theta) > 1.5 && aLong > 0.3) road += 0.35;
-    let eng = t < ENGINE_START ? 0 : (v < 0.5 ? 0.05 : 0.02) * Math.sin(enginePhase);
+    if (clutchJudder && aLong > 0.3 && v > 0.3 && v < 6) road += 0.3;
+    // 4-cylinder: mostly at twice crank speed (firing), a little at crank speed.
+    let engAmp = t < ENGINE_START ? 0 : (v < 0.5 ? 0.05 * Math.sqrt(rpm / 780) : 0.02);
+    if (resonanceRpm && v < 0.5) engAmp *= 1 + 4 * Math.exp(-(((rpm - resonanceRpm) / 150) ** 2));
+    let eng = engAmp * (Math.sin(2 * enginePhase) + 0.15 * Math.sin(enginePhase) +
+      (misfire ? 0.9 * Math.sin(0.5 * enginePhase) + 0.6 * Math.sin(enginePhase) : 0));
     if (t >= IN_GEAR[0] && t < IN_GEAR[1]) eng *= mountFactor;       // healthy mounts: small rise in gear
     if (v < 0.5) road = t < ENGINE_START ? 0.008 : 0.015;          // parked: sensor noise, cabin fan
     // Tap test: a knock each second rings the column/mount at TAP_HZ.
@@ -128,8 +148,10 @@ export function simulateDrive(vehicle = {}, {
       id: `demo-${start}`, name: 'Demo drive (synthetic)', startedAt: start, demo: true,
       vehicle, samples: motion.length / MS, gpsFixes: gps.length / GS, durationMs: duration * 1000,
       steerCal: [start + 15 * 1000], markers: 1,
-      segments: SEGMENTS.map(([id, a, b]) => ({ id, t0: start + a * 1000, t1: start + b * 1000 })),
+      segments: SEGMENTS
+        .filter(([id]) => (vehicle.gearbox === 'automatic' ? id !== 'pullaway' : id !== 'idle_drive'))
+        .map(([id, a, b]) => ({ id, t0: start + a * 1000, t1: start + b * 1000 })),
     },
-    motion, gps, markers: [start + 290 * 1000],
+    motion, gps, markers: [start + (290 + REV_SHIFT) * 1000],
   };
 }

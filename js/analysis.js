@@ -612,7 +612,11 @@ export function diagnose(res) {
             'or something tied to engine rpm rather than road speed (engine, alternator, A/C compressor). ' +
             'Tip: repeat at the same road speed in two different gears – if it changes, it is engine-related.' +
             (Math.abs(p.hz - res.tapHz) < 1.5 ? ` It matches the ${res.tapHz.toFixed(1)} Hz steering-wheel/mount resonance from the tap test, so check the phone mount and steering column first.` : '') +
-            (res.idleTest && Math.abs(p.hz - res.idleTest.peakHz) < 1 ? ' It also matches the idle-test peak, pointing at the engine.' : ''),
+            (res.idleTest && Math.abs(p.hz - res.idleTest.peakHz) < 1 ? ' It also matches the idle-test peak, pointing at the engine.' : '') +
+            (() => {
+              const m = (res.engineLines || []).find(l => Math.abs(l.alias - p.hz) < 0.8 && l.order >= 1);
+              return m ? ` It also sits where the engine's ${m.label} frequency at ${m.rpm} rpm (${m.f.toFixed(0)} Hz) lands after fold-back at this sample rate – if you drive near ${m.rpm} rpm there, suspect the engine.` : '';
+            })(),
           evidence: p });
         break;
       }
