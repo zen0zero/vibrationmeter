@@ -35,7 +35,7 @@ export class Recorder {
     this.meta = {
       id: `rec-${startedAt}`, startedAt, name: meta.name || new Date(startedAt).toLocaleString(),
       vehicle: meta.vehicle, notes: meta.notes || '', userAgent: navigator.userAgent,
-      samples: 0, gpsFixes: 0, markers: 0, durationMs: 0, interval: null, steerCal: [],
+      samples: 0, gpsFixes: 0, markers: 0, durationMs: 0, interval: null, steerCal: [], segments: [],
     };
     this.buf = { motion: [], gps: [], marker: [] };
     this.seq = 0;
@@ -125,6 +125,26 @@ export class Recorder {
     return t;
   }
 
+  // Guided tests are labelled time ranges of the recording.
+  startTest(id) {
+    if (!this.active) return null;
+    this.endTest();
+    this.currentTest = { id, t0: Date.now(), t1: null };
+    this.meta.segments.push(this.currentTest);
+    saveSession(this.meta).catch(() => {});
+    return this.currentTest;
+  }
+
+  endTest({ discard = false } = {}) {
+    const seg = this.currentTest;
+    if (!seg) return null;
+    this.currentTest = null;
+    if (discard) this.meta.segments = this.meta.segments.filter(s => s !== seg);
+    else seg.t1 = Date.now();
+    saveSession(this.meta).catch(() => {});
+    return discard ? null : seg;
+  }
+
   async flush() {
     const jobs = [];
     for (const kind of ['motion', 'gps', 'marker']) {
@@ -159,6 +179,7 @@ export class Recorder {
 
   async stop() {
     if (!this.active) return null;
+    this.endTest();
     this.active = false;
     window.removeEventListener('devicemotion', this.onMotion);
     if (this.watchId !== undefined) navigator.geolocation.clearWatch(this.watchId);

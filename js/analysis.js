@@ -1,4 +1,5 @@
 import { attachSteering } from './steering.js';
+import { analyzeTests, STATIONARY } from './tests.js';
 
 // Vibration analysis: resampling, spectra, order tracking against wheel speed,
 // and heuristic attribution of vibration to likely causes.
@@ -212,6 +213,17 @@ export function analyze(track, vehicle = {}) {
     windows.push(w);
   }
 
+  // Label windows that fall inside a guided test; parked tests other than idle are
+  // kept out of the automatic statistics.
+  const segments = (track.meta && track.meta.segments) || [];
+  for (const w of windows) {
+    const abs = track.t0 + w.tMid * 1000;
+    const seg = segments.find(g => abs >= g.t0 && abs <= g.t1);
+    if (!seg) continue;
+    w.test = seg.id;
+    if (STATIONARY.has(seg.id) && seg.id !== 'idle') w.state = 'test';
+  }
+
   const res = {
     fs, rawFs, N, df, nyq, freqs, kMin, kMax, windows, circumference: C, finalDrive: fdr,
     cylinders: cyl, hasGyro, duration: track.t[track.n - 1] - track.t[0], samples: track.n,
@@ -229,6 +241,9 @@ export function analyze(track, vehicle = {}) {
   res.hzSpectrum = hzSpectrum(res, w => w.state !== 'idle' && Number.isFinite(w.speed) && w.speed >= MIN_ORDER_SPEED);
   res.bands = speedBands(res);
   res.turnBands = turnBands(res);
+  const tests = analyzeTests({ r, ax, ay, az, fs, N, t0: track.t0 || 0, segments, matchedRatio, res });
+  res.tests = tests.results;
+  res.testFindings = tests.findings;
   res.campbell = campbell(res);
   res.findings = diagnose(res);
   return res;
@@ -554,17 +569,24 @@ export function diagnose(res) {
       evidence: { ...brakeCmp, order: ob } });
   }
 
-  const idle = res.bands.find(b => b.idle);
-  if (idle && idle.n >= 2) {
-    const ws = res.windows.filter(w => w.state === 'idle');
-    const avg = new Float64Array(res.N / 2);
-    for (const w of ws) for (let k = 0; k < avg.length; k++) avg[k] += w.spec[k] / ws.length;
-    const [p] = spectrumPeaks(avg, res.freqs, res.kMin, res.kMax, 1);
+  for (const f of res.testFindings || []) add(f);
+
+  const idleBand = res.bands.find(b => b.idle);
+  const it = res.idleTest;
+  const idle = it ? { rms: it.rms } : idleBand && idleBand.n >= 2 ? idleBand : null;
+  if (idle) {
+    let p = it ? { hz: it.peakHz } : null;
+    if (!it) {
+      const ws = res.windows.filter(w => w.state === 'idle');
+      const avg = new Float64Array(res.N / 2);
+      for (const w of ws) for (let k = 0; k < avg.length; k++) avg[k] += w.spec[k] / ws.length;
+      [p] = spectrumPeaks(avg, res.freqs, res.kMin, res.kMax, 1);
+    }
     const rpm = p ? p.hz * 120 / res.cylinders : NaN;
     const rough = idle.rms > 0.12;
     add({ id: 'idle', severity: rough ? 'warning' : 'info', confidence: rough ? clamp01((idle.rms - 0.08) / 0.2) : 0.1,
       title: rough ? 'Noticeable vibration at standstill (engine running)' : 'Standstill vibration is low',
-      detail: `At standstill the vibration level is ${idle.rms.toFixed(3)} m/s²` +
+      detail: `At ${it ? 'idle (guided test)' : 'standstill'} the vibration level is ${idle.rms.toFixed(3)} m/s²` +
         (p ? `, with a peak at ${p.hz.toFixed(1)} Hz (≈ ${Math.round(rpm)} rpm if it is the ${res.cylinders}-cylinder firing frequency, ` +
           `or ${Math.round(p.hz * 60)} rpm at engine order 1)` : '') + '. ' +
         (rough ? 'Vibration at a standstill cannot come from wheels or tires. Suspect engine mounts, a misfire, idle speed too low, or the A/C compressor. '
@@ -588,7 +610,9 @@ export function diagnose(res) {
           detail: `A peak at ${p.hz.toFixed(1)} Hz stays at the same frequency at different road speeds. ` +
             'This is usually a structural resonance (steering column, mirror, seat, dashboard), the phone mount itself, ' +
             'or something tied to engine rpm rather than road speed (engine, alternator, A/C compressor). ' +
-            'Tip: repeat at the same road speed in two different gears – if it changes, it is engine-related.',
+            'Tip: repeat at the same road speed in two different gears – if it changes, it is engine-related.' +
+            (Math.abs(p.hz - res.tapHz) < 1.5 ? ` It matches the ${res.tapHz.toFixed(1)} Hz steering-wheel/mount resonance from the tap test, so check the phone mount and steering column first.` : '') +
+            (res.idleTest && Math.abs(p.hz - res.idleTest.peakHz) < 1 ? ' It also matches the idle-test peak, pointing at the engine.' : ''),
           evidence: p });
         break;
       }
@@ -605,7 +629,13 @@ export function diagnose(res) {
       add({ id: 'band', severity: 'info', confidence: clamp01((top.rms / ref - 1.5) / 2) * 0.7,
         title: `Vibration peaks in the ${kmh(top)} range`,
         detail: `Vibration is ${(top.rms / ref).toFixed(1)}× higher around ${kmh(top)} than at other speeds and drops again above it. ` +
-          'A vibration that appears in one speed window and fades above it is typical of wheel imbalance exciting a suspension or steering resonance.',
+          'A vibration that appears in one speed window and fades above it is typical of wheel imbalance exciting a suspension or steering resonance.' +
+          (() => {
+            const fw = ((top.lo + top.hi) / 2) / 3.6 / res.circumference;
+            return Math.abs(fw - res.tapHz) / res.tapHz < 0.2
+              ? ` Here the wheels turn ${fw.toFixed(1)} times a second, right at the ${res.tapHz.toFixed(1)} Hz steering resonance measured in the tap test – so even a small imbalance gets amplified at this speed.`
+              : '';
+          })(),
         evidence: { band: top, ratio: top.rms / ref } });
     }
   }

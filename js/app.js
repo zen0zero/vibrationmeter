@@ -5,6 +5,7 @@ import { analyze, liveSpectrum, highPass, tireCircumference, vehicleCircumferenc
 import { lineChart, heatmap, barChart } from './charts.js';
 import { simulateDrive } from './sim.js';
 import { fmtSteer } from './steering.js';
+import { TESTS, TEST_BY_ID, testText } from './tests.js';
 
 const $ = s => document.querySelector(s);
 const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -78,28 +79,37 @@ function renderAlerts() {
 }
 renderAlerts();
 
+async function startRecording() {
+  const btn = $('#btn-start');
+  try {
+    recorder.sensorError = null;
+    await recorder.start({ name: $('#rec-name').value.trim(), vehicle: currentVehicle(), notes: currentVehicle().notes });
+  } catch (err) {
+    recorder.sensorError = err.message;
+    renderAlerts();
+    return false;
+  }
+  btn.textContent = 'Stop recording';
+  btn.classList.add('stop');
+  $('#btn-mark').disabled = false;
+  $('#btn-centre').disabled = false;
+  liveSteer = { cont: NaN, prev: NaN, zero: NaN };
+  $('#live-steer').textContent = '–';
+  $('#live-steer-unit').textContent = 'set centre below';
+  $('#rec-name').disabled = true;
+  liveTimer = setInterval(updateLive, 250);
+  testState.done = {};
+  renderTests();
+  renderAlerts();
+  return true;
+}
+
 $('#btn-start').addEventListener('click', async () => {
   const btn = $('#btn-start');
   if (!recorder.active) {
-    try {
-      recorder.sensorError = null;
-      await recorder.start({ name: $('#rec-name').value.trim(), vehicle: currentVehicle(), notes: currentVehicle().notes });
-    } catch (err) {
-      recorder.sensorError = err.message;
-      renderAlerts();
-      return;
-    }
-    btn.textContent = 'Stop recording';
-    btn.classList.add('stop');
-    $('#btn-mark').disabled = false;
-    $('#btn-centre').disabled = false;
-    liveSteer = { cont: NaN, prev: NaN, zero: NaN };
-    $('#live-steer').textContent = '–';
-    $('#live-steer-unit').textContent = 'set centre below';
-    $('#rec-name').disabled = true;
-    liveTimer = setInterval(updateLive, 250);
-    renderAlerts();
+    await startRecording();
   } else {
+    cancelTest();
     btn.disabled = true;
     clearInterval(liveTimer);
     const meta = await recorder.stop();
@@ -146,6 +156,178 @@ function updateLiveSteer(L) {
   }
 }
 
+// ---------- guided tests ----------
+const testState = { active: null, queue: [], done: {}, timer: null, acc: 0, n: 0 };
+const PROBLEM_KEY = 'vm.problemSpeed';
+try { $('#problem-speed').value = localStorage.getItem(PROBLEM_KEY) || ''; } catch (_) { /* ignore */ }
+$('#problem-speed').addEventListener('input', () => {
+  try { localStorage.setItem(PROBLEM_KEY, $('#problem-speed').value); } catch (_) { /* ignore */ }
+  renderTests();
+});
+const problemSpeed = () => +$('#problem-speed').value || 100;
+
+let audioCtx = null;
+function beep(freq = 880, ms = 150) {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.frequency.value = freq; g.gain.value = 0.15;
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime + ms / 1000);
+  } catch (_) { /* no audio */ }
+  if (navigator.vibrate) navigator.vibrate(ms);
+}
+
+function renderTests() {
+  for (const group of ['baseline', 'driving']) {
+    $(`#tests-${group}`).innerHTML = TESTS.filter(t => t.group === group).map(t => {
+      const d = testState.done[t.id];
+      return `<li class="test-item${d ? ' done' : ''}">
+        <div class="t-main">
+          <div class="t-title">${d ? '<span class="ok">✓</span> ' : ''}${esc(t.title)}${t.optional ? ' <span class="muted small">optional</span>' : ''}${t.timed ? ` <span class="muted small">${t.timed} s</span>` : ''}</div>
+          <div class="muted small">${d ? `Measured ${d.rms.toFixed(3)} m/s²` : esc(t.why)}</div>
+        </div>
+        <button class="btn" data-test="${t.id}" ${testState.active ? 'disabled' : ''}>${d ? 'Redo' : 'Run'}</button>
+      </li>`;
+    }).join('');
+  }
+  $('#btn-baseline').disabled = !!testState.active;
+}
+
+function showTestPanel(html) {
+  const p = $('#test-active');
+  p.hidden = !html;
+  if (html) { p.innerHTML = html; p.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+}
+
+function prepareTest(id) {
+  const t = TEST_BY_ID[id];
+  testState.active = { id, phase: 'ready' };
+  const left = testState.queue.length;
+  showTestPanel(`
+    <div class="t-step muted small">${t.group === 'baseline' ? 'Parked baseline' : 'Driving test – passenger operates the phone'}${left ? ` · ${left} more after this` : ''}</div>
+    <div class="t-head">${esc(t.title)}</div>
+    <p class="t-how">${esc(testText(t.how, problemSpeed()))}</p>
+    <div id="t-warn"></div>
+    <div class="row-actions">
+      <button class="big primary" id="t-begin">${t.timed ? 'Begin' : 'Start test'}</button>
+    </div>
+    <div class="row-actions">
+      ${testState.queue.length || t.optional ? '<button class="btn" id="t-skip">Skip</button>' : ''}
+      <button class="btn" id="t-cancel">Cancel</button>
+    </div>`);
+  renderTests();
+  $('#t-begin').onclick = () => beginTest(id);
+  if ($('#t-skip')) $('#t-skip').onclick = () => nextTest();
+  $('#t-cancel').onclick = cancelTest;
+}
+
+async function beginTest(id) {
+  const t = TEST_BY_ID[id];
+  if (!recorder.active && !(await startRecording())) { cancelTest(); return; }
+  const fix = recorder.lastFix;
+  if (t.group === 'baseline' && fix && Date.now() - fix.received < 5000 && fix.speed > 1) {
+    $('#t-warn').innerHTML = '<div class="alert warn"><b>Moving?</b>GPS says the car is moving. This test needs the car parked.</div>';
+    return;
+  }
+  testState.active = { id, phase: 'countdown' };
+  let n = t.timed ? 3 : 0;
+  const tick = () => {
+    if (!testState.active || testState.active.id !== id) return;
+    if (n > 0) {
+      showTestPanel(`<div class="t-head">${esc(t.title)}</div><div class="t-count">${n}</div><p class="muted">Get ready – hands off the wheel.</p>`);
+      beep(660, 80);
+      n--;
+      testState.timer = setTimeout(tick, 1000);
+    } else {
+      measure(id);
+    }
+  };
+  tick();
+}
+
+function measure(id) {
+  const t = TEST_BY_ID[id];
+  recorder.startTest(id);
+  testState.active = { id, phase: 'measuring', started: Date.now() };
+  testState.acc = 0; testState.n = 0;
+  beep(990, 200);
+  const render = () => {
+    if (!testState.active || testState.active.id !== id) return;
+    const el = (Date.now() - testState.active.started) / 1000;
+    const rms = testState.n ? Math.sqrt(testState.acc / testState.n) : NaN;
+    if (t.timed) {
+      const left = Math.max(0, t.timed - el);
+      showTestPanelOnce(id, `<div class="t-head">${esc(t.title)}</div>
+        <p class="t-how">${esc(testText(t.how, problemSpeed()))}</p>
+        <div class="progress"><div id="t-bar"></div></div>
+        <div class="muted small" id="t-status"></div>
+        <div class="row-actions"><button class="btn" id="t-cancel2">Cancel</button></div>`);
+      $('#t-bar').style.width = `${Math.min(100, el / t.timed * 100)}%`;
+      $('#t-status').textContent = `${Math.ceil(left)} s left · ${Number.isFinite(rms) ? rms.toFixed(3) + ' m/s²' : 'measuring…'}`;
+      if (left <= 0) return finishTest(id);
+    } else {
+      showTestPanelOnce(id, `<div class="t-head">${esc(t.title)}</div>
+        <p class="t-how">${esc(testText(t.how, problemSpeed()))}</p>
+        <div class="muted small" id="t-status"></div>
+        <div class="row-actions"><button class="big primary" id="t-done">Done</button></div>
+        <div class="row-actions"><button class="btn" id="t-cancel2">Cancel</button></div>`);
+      $('#t-status').textContent = `${Math.floor(el)} s · ${Number.isFinite(rms) ? rms.toFixed(3) + ' m/s²' : 'measuring…'}`;
+      $('#t-done').onclick = () => finishTest(id);
+    }
+    $('#t-cancel2').onclick = cancelTest;
+    testState.timer = setTimeout(render, 250);
+  };
+  render();
+}
+
+let panelFor = null;
+function showTestPanelOnce(id, html) {
+  if (panelFor === id) return;
+  panelFor = id;
+  showTestPanel(html);
+}
+
+function finishTest(id) {
+  clearTimeout(testState.timer);
+  const t = TEST_BY_ID[id];
+  recorder.endTest();
+  if (t.setsCentre) { recorder.setCentre(); liveSteer.zero = liveSteer.cont; }
+  testState.done[id] = { rms: testState.n ? Math.sqrt(testState.acc / testState.n) : NaN };
+  beep(1320, 300);
+  toast(`${t.title}: done`);
+  nextTest();
+}
+
+function nextTest() {
+  clearTimeout(testState.timer);
+  panelFor = null;
+  testState.active = null;
+  const next = testState.queue.shift();
+  if (next) prepareTest(next);
+  else { showTestPanel(null); renderTests(); }
+}
+
+function cancelTest() {
+  clearTimeout(testState.timer);
+  if (testState.active?.phase === 'measuring') recorder.endTest({ discard: true });
+  panelFor = null;
+  testState.active = null;
+  testState.queue = [];
+  showTestPanel(null);
+  renderTests();
+}
+
+document.querySelector('#view-record').addEventListener('click', e => {
+  const b = e.target.closest('button[data-test]');
+  if (b) { testState.queue = []; prepareTest(b.dataset.test); }
+});
+$('#btn-baseline').addEventListener('click', () => {
+  testState.queue = TESTS.filter(t => t.group === 'baseline').map(t => t.id);
+  prepareTest(testState.queue.shift());
+});
+renderTests();
+
 let liveTick = 0;
 function updateLive() {
   if (!recorder.active) return;
@@ -164,6 +346,7 @@ function updateLive() {
     const s = liveSpectrum(L.x, L.y, L.z, rate);
     if (s) {
       $('#live-rms').textContent = s.rms.toFixed(2);
+      if (testState.active?.phase === 'measuring') { testState.acc += s.rms * s.rms; testState.n++; }
       $('#live-peak').textContent = s.peakHz.toFixed(1);
       const C = vehicleCircumference(currentVehicle());
       $('#live-order').textContent = speed > 3 ? `Hz · ${(s.peakHz / (speed / C)).toFixed(2)}× wheel` : 'Hz';
@@ -294,7 +477,7 @@ function openAnalysis(rec, track) {
   }, 30);
 }
 
-const STATE_LABEL = { cruise: 'steady', transient: 'varying', accel: 'accelerating', braking: 'braking', idle: 'standstill', nospeed: 'no GPS', gap: 'gap' };
+const STATE_LABEL = { test: 'guided test', cruise: 'steady', transient: 'varying', accel: 'accelerating', braking: 'braking', idle: 'standstill', nospeed: 'no GPS', gap: 'gap' };
 const SEV = { warning: ['▲', 'Likely cause'], info: ['●', 'Note'], good: ['✓', 'OK'] };
 
 function renderAnalysis() {
@@ -322,6 +505,12 @@ function renderAnalysis() {
       <div class="f-head"><span class="f-title">${esc(f.title)}</span><span class="f-tag"><span class="ico">${ico}</span> ${tag}</span></div>
       <p>${esc(f.detail)}</p>${conf}</div>`;
   }).join('');
+
+  const tests = res.tests || [];
+  $('#an-tests-wrap').hidden = !tests.length;
+  $('#an-tests').innerHTML = tests.length ? `<thead><tr><th>Test</th><th class="num">Time</th><th class="num">m/s² RMS</th><th class="num">Peak</th><th>Result</th></tr></thead><tbody>` +
+    tests.map(t => `<tr><td>${esc(t.title)}</td><td class="num">${t.duration.toFixed(0)} s</td><td class="num">${t.rms.toFixed(3)}</td>
+      <td class="num">${Number.isFinite(t.peakHz) ? t.peakHz.toFixed(1) + ' Hz' : '–'}</td><td>${esc(t.note)}</td></tr>`).join('') + '</tbody>' : '';
 
   drawAnalysisCharts();
 }

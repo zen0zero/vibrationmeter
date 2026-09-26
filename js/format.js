@@ -19,6 +19,7 @@ const CSV_COLUMNS = [
   'lateral_acc',                        // cornering acceleration, m/s², + = left
   'longitudinal_acc',                   // acceleration (+) / braking (−), m/s²
   'marker',                             // 1 = "I feel it" mark, C = steering centre set
+  'test',                               // guided test running at this sample (e.g. idle, coast)
 ];
 
 const MAX_GPS_GAP_MS = 6000;
@@ -114,6 +115,7 @@ export function toCsv(track) {
   for (const mt of track.markers) markerIdx.set(nearestIndex(track, mt), '1');
   for (const ts of track.meta?.steerCal || []) markerIdx.set(nearestIndex(track, (ts - track.t0) / 1000), 'C');
   const st = attachSteering(track);
+  const segs = (track.meta?.segments || []).filter(g => g.t1 > g.t0);
   for (let i = 0; i < track.n; i++) {
     lines.push([
       track.ts[i].toFixed(3), track.t[i].toFixed(4),
@@ -123,6 +125,7 @@ export function toCsv(track) {
       num(track.speed[i] * 3.6, 2), num(track.lat[i], 7), num(track.lon[i], 7),
       num(track.gpsAcc[i], 1), num(track.gpsAge[i], 0),
       num(st.deg[i], 1), num(st.latAcc[i], 2), num(st.longAcc[i], 2), markerIdx.get(i) || '',
+      segs.find(g => track.ts[i] >= g.t0 && track.ts[i] <= g.t1)?.id || '',
     ].join(','));
   }
   return lines.join('\n') + '\n';
@@ -165,7 +168,8 @@ function trackFromCsv(text, filename) {
   const idx = Object.fromEntries(CSV_COLUMNS.map(c => [c, col(c)]));
   const get = (cells, c) => (idx[c] >= 0 && cells[idx[c]] !== '' && cells[idx[c]] !== undefined ? +cells[idx[c]] : NaN);
   let t0 = 0;
-  const steerCal = [];
+  const steerCal = [], segments = [];
+  const testCol = col('test');
   for (let i = 0; i < n; i++) {
     const c = rows[i + 1].split(',');
     const ts = get(c, 'timestamp_ms');
@@ -180,9 +184,13 @@ function trackFromCsv(text, filename) {
     const mk = idx.marker >= 0 ? (c[idx.marker] || '').trim() : '';
     if (mk === '1') tr.markers.push(tr.t[i]);
     if (mk === 'C') steerCal.push(ts);
+    const test = testCol >= 0 ? (c[testCol] || '').trim() : '';
+    const last = segments[segments.length - 1];
+    if (test && last && last.id === test && ts - last.t1 < 1000) last.t1 = ts;
+    else if (test) segments.push({ id: test, t0: ts, t1: ts });
   }
   tr.t0 = t0;
-  tr.meta = { name: filename, startedAt: t0, steerCal };
+  tr.meta = { name: filename, startedAt: t0, steerCal, segments };
   return tr;
 }
 

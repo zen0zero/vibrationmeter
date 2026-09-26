@@ -169,6 +169,28 @@ button { font: inherit; cursor: pointer; }
 .conf { height: 4px; background: var(--grid); border-radius: 2px; margin-top: 8px; overflow: hidden; }
 .conf > div { height: 100%; background: var(--text-2); border-radius: 2px; }
 
+.test-active { border: 2px solid var(--accent); }
+.t-head { font-size: 20px; font-weight: 700; margin: 2px 0 6px; }
+.t-how { font-size: 17px; margin: 0 0 10px; }
+.t-count { font-size: 72px; font-weight: 700; text-align: center; font-variant-numeric: tabular-nums; }
+.progress { height: 10px; background: var(--grid); border-radius: 5px; overflow: hidden; margin: 8px 0; }
+.progress > div { height: 100%; width: 0; background: var(--accent); transition: width .25s linear; }
+#tests-card h3 { font-size: 14px; margin: 14px 0 6px; color: var(--text-2); }
+.test-list { list-style: none; padding: 0; margin: 8px 0 0; }
+.test-item { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--border); }
+.test-item .t-main { min-width: 0; }
+.test-item .t-title { font-weight: 600; }
+.test-item .ok { color: var(--good); font-weight: 700; }
+.inline-field { display: grid; gap: 4px; font-size: 13px; color: var(--text-2); }
+.inline-field span { display: flex; align-items: center; gap: 8px; }
+.inline-field input { max-width: 110px; }
+.primary-outline { border-color: var(--accent); color: var(--accent); }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--text-2); font-weight: 600; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
 .form { display: grid; gap: 12px; }
 .form label { display: grid; gap: 4px; font-size: 13px; color: var(--text-2); }
 .help { margin-top: 8px; color: var(--text-2); }

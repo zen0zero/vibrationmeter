@@ -6,19 +6,29 @@ import { vehicleCircumference } from './analysis.js';
 
 // Speed profile: [time s, speed km/h] keyframes, linearly interpolated.
 const PROFILE = [
-  [0, 0], [40, 0], [65, 50], [130, 50], [165, 110], [290, 110], [298, 70],
-  [360, 70], [385, 130], [470, 130], [480, 95], [540, 95], [560, 0], [590, 0],
+  [0, 0], [100, 0],                     // parked baseline tests
+  [125, 50], [190, 50], [225, 110], [350, 110], [358, 70],
+  [420, 70], [445, 130], [530, 130], [540, 95], [600, 95],
+  [620, 80],                            // coast in neutral
+  [635, 0], [665, 0],                   // braking test, then stop
   // car park: pull away at full lock, twice each way
-  [596, 14], [604, 14], [608, 0], [612, 0], [618, 14], [626, 14], [630, 0], [640, 0],
+  [671, 14], [679, 14], [683, 0], [687, 0], [693, 14], [701, 14], [705, 0], [715, 0],
 ];
 
 // Steering-wheel angle keyframes [time s, degrees, + = left].
 const STEER = [
-  [0, 0], [75, 0], [78, 40], [88, 40], [91, 0], [100, 0], [103, -40], [113, -40], [116, 0],
-  [180, 0], [183, 7], [201, 7], [204, 0], [210, 0], [213, -7], [231, -7], [234, 0],
-  [240, 0], [243, 7], [261, 7], [264, 0], [268, 0], [271, -7], [286, -7], [289, 0],
-  [590, 0], [593, 420], [606, 420], [609, 0], [612, 0], [615, -420], [628, -420], [631, 0], [640, 0],
+  [0, 0], [135, 0], [138, 40], [148, 40], [151, 0], [160, 0], [163, -40], [173, -40], [176, 0],
+  [240, 0], [243, 7], [261, 7], [264, 0], [270, 0], [273, -7], [291, -7], [294, 0],
+  [300, 0], [303, 7], [321, 7], [324, 0], [328, 0], [331, -7], [346, -7], [349, 0],
+  [665, 0], [668, 420], [681, 420], [684, 0], [687, 0], [690, -420], [703, -420], [706, 0], [715, 0],
 ];
+
+// Guided tests performed during the demo drive [id, start s, end s].
+const SEGMENTS = [
+  ['engine_off', 0, 15], ['tap', 18, 28], ['idle', 35, 55], ['idle_drive', 60, 75],
+  ['cruise', 575, 598], ['coast', 600, 619], ['brake', 620, 636],
+];
+const ENGINE_START = 32, TAP_HZ = 14, IN_GEAR = [60, 75];
 
 const lerp = (keys, t, scale = 1) => {
   for (let i = 1; i < keys.length; i++) {
@@ -42,7 +52,7 @@ function rng(seed) {
 const STEERING_RATIO = 15, WHEELBASE = 2.65, WHEEL_TILT = 25 * Math.PI / 180;
 
 export function simulateDrive(vehicle = {}, {
-  fs = 60, seed = 7, imbalance = true, brakeJudder = true, bearing = 'right', cvJoint = false, pullDeg = 0,
+  fs = 60, seed = 7, imbalance = true, brakeJudder = true, bearing = 'right', cvJoint = false, pullDeg = 0, mountFactor = 1.2,
 } = {}) {
   const rand = rng(seed);
   const gauss = () => {
@@ -83,7 +93,14 @@ export function simulateDrive(vehicle = {}, {
     const load = bearing === 'right' ? aLat : bearing === 'left' ? -aLat : 0;
     if (bearing && v > 5) road += 0.005 * v * Math.max(0, load);
     if (cvJoint && Math.abs(theta) > 1.5 && aLong > 0.3) road += 0.35;
-    const eng = (v < 0.5 ? 0.05 : 0.02) * Math.sin(enginePhase);
+    let eng = t < ENGINE_START ? 0 : (v < 0.5 ? 0.05 : 0.02) * Math.sin(enginePhase);
+    if (t >= IN_GEAR[0] && t < IN_GEAR[1]) eng *= mountFactor;       // healthy mounts: small rise in gear
+    if (v < 0.5) road = t < ENGINE_START ? 0.008 : 0.015;          // parked: sensor noise, cabin fan
+    // Tap test: a knock each second rings the column/mount at TAP_HZ.
+    if (t >= 18 && t < 28) {
+      const since = t - Math.floor(t);
+      eng += 1.5 * Math.exp(-since / 0.25) * Math.sin(2 * Math.PI * TAP_HZ * since);
+    }
 
     // In-plane specific force in wheel coordinates: (x = right, y = up the rim).
     const ux = -aLat + road * gauss() + 0.6 * o1 + eng;
@@ -110,8 +127,9 @@ export function simulateDrive(vehicle = {}, {
     meta: {
       id: `demo-${start}`, name: 'Demo drive (synthetic)', startedAt: start, demo: true,
       vehicle, samples: motion.length / MS, gpsFixes: gps.length / GS, durationMs: duration * 1000,
-      steerCal: [start + 20 * 1000], markers: 1,
+      steerCal: [start + 15 * 1000], markers: 1,
+      segments: SEGMENTS.map(([id, a, b]) => ({ id, t0: start + a * 1000, t1: start + b * 1000 })),
     },
-    motion, gps, markers: [start + 230 * 1000],
+    motion, gps, markers: [start + 290 * 1000],
   };
 }

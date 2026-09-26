@@ -48,10 +48,37 @@ Recordings are written to IndexedDB every 2 s while recording. A crash or closed
 | `lateral_acc` | cornering acceleration, m/s², + = car accelerating to the left |
 | `longitudinal_acc` | acceleration (+) / braking (−), m/s² |
 | `marker` | `1` where the Mark button was pressed, `C` where the steering centre was set |
+| `test` | guided test running at that sample (`engine_off`, `tap`, `idle`, `coast`, …) |
 
 The last three are derived when exporting, so older recordings get them too.
 
 The JSON export keeps the unmodified GPS fixes (1 Hz, with their own timestamps) next to the motion samples.
+
+## Guided tests
+
+The **Record** tab has a guided-test list. A test records a labelled stretch under known conditions and starts the recording if needed.
+Parked tests are timed, with a countdown and beeps so your hands can stay off the wheel. Driving tests are started and ended by a passenger.
+Enter the speed where you feel the vibration, and the driving instructions use it.
+
+| test | conditions | what it tells the analysis |
+|---|---|---|
+| Engine off | parked, wheels straight, hands off (15 s) | sensor noise floor, loose mount; sets the steering centre |
+| Tap test | tap the rim once a second (10 s) | ringing frequency of steering column + mount; explains speed-band humps and fixed-frequency peaks |
+| Idle | P/N, A/C off (20 s) | engine baseline, firing frequency → idle rpm |
+| Idle with A/C on | (20 s, optional) | mounts / idle speed control / compressor, if vibration rises |
+| In gear, brake held | automatic in D (15 s, optional) | engine/gearbox mounts, if vibration rises well above idle |
+| Slow rev | to ~3000 rpm and back (30 s, optional) | engine/exhaust resonance with no road input |
+| Lock-to-lock | full left → full right (25 s, optional) | steering range; unequal left/right = wheel off-centre on the rack; shudder at lock |
+| Steady cruise | at the problem speed, ≥ 20 s | reference for the next two |
+| Coast in neutral | roll down through the problem speed | unchanged → wheels/tires/brakes/bearings; disappears → engine or drivetrain under load |
+| Same speed, lower gear | ≥ 20 s (optional) | changes → engine-rpm related |
+| Braking | firm, 90 → 20 km/h, twice (optional) | repeatable brake-judder data |
+
+For the level-based comparisons (A/C, in gear), the app uses the larger of two ratios against idle: overall vibration, and vibration at the idle firing frequency.
+Coast and gear tests are compared with steady driving at the same speed (±6 km/h).
+Results appear in a **Guided tests** table in the Analysis tab. They also appear as findings, and they sharpen other findings,
+for example "this speed-band hump is where the wheels turn at the tap-test resonance".
+The CSV `test` column records which test each sample belongs to.
 
 ## Steering angle and cornering g
 
@@ -122,8 +149,9 @@ js/recorder.js        devicemotion + geolocation capture, wake lock, chunked sav
 js/storage.js         IndexedDB
 js/format.js          data layout, CSV/JSON export and import, GPS↔sample alignment
 js/analysis.js        FFT, order tracking, diagnosis heuristics
+js/tests.js           guided test definitions and their analysis
 js/steering.js        steering angle, cornering and braking g from gravity + gyro + GPS
 js/charts.js          canvas charts with touch tooltips
-js/sim.js             synthetic demo drive (imbalance, brake judder, right wheel bearing)
+js/sim.js             synthetic demo drive (baseline tests, imbalance, brake judder, right wheel bearing, neutral coast)
 sw.js                 offline cache
 ```

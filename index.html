@@ -25,6 +25,7 @@
     <!-- RECORD -->
     <section id="view-record" class="view active">
       <div id="rec-alerts"></div>
+      <div id="test-active" class="card test-active" hidden></div>
       <div class="tiles">
         <div class="tile hero"><span class="label">Speed</span><span class="value" id="live-speed">–</span><span class="unit">km/h</span></div>
         <div class="tile hero"><span class="label">Vibration</span><span class="value" id="live-rms">–</span><span class="unit">m/s² RMS</span></div>
@@ -43,6 +44,18 @@
         <button id="btn-start" class="big primary">Start recording</button>
         <button id="btn-mark" class="big mark" disabled>Mark “I feel it now”</button>
         <button id="btn-centre" class="btn" disabled>Set steering centre (wheel straight, car stopped)</button>
+      </div>
+      <div class="card" id="tests-card">
+        <div class="card-h">Guided tests</div>
+        <p class="muted small">Known conditions make the diagnosis much sharper. Start with the parked baseline (about 3 minutes), then do the driving tests with a passenger holding the phone. Starting a test starts the recording if needed.</p>
+        <label class="inline-field">Speed where you feel the vibration
+          <span><input id="problem-speed" type="number" inputmode="numeric" min="20" max="200" step="5" placeholder="100"> km/h</span>
+        </label>
+        <h3>Parked baseline</h3>
+        <button id="btn-baseline" class="btn primary-outline">Run baseline sequence</button>
+        <ul id="tests-baseline" class="test-list"></ul>
+        <h3>Driving tests <span class="muted small">(passenger operates)</span></h3>
+        <ul id="tests-driving" class="test-list"></ul>
       </div>
       <details class="help">
         <summary>How to record a useful drive</summary>
@@ -80,6 +93,10 @@
         <div id="an-findings"></div>
         <p class="muted small">Heuristic assessment from phone sensors – use it to guide inspection, not as a verdict. Confidence reflects how clearly the pattern stands out in this recording.</p>
 
+        <div id="an-tests-wrap" hidden>
+          <h2>Guided tests</h2>
+          <div class="card table-wrap"><table id="an-tests"></table></div>
+        </div>
         <h2>Speed</h2>
         <div class="card"><div class="chart" id="ch-speed"></div></div>
         <h2>Steering</h2>
